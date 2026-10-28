@@ -13,6 +13,7 @@ MODELS = {"Nemotron": "nemotron", "Qwen": "qwen", "Ministral": "ministral"}
 PROMPTS = {"Chain of Thought": "cot", "GEPA": "gepa", "Zero-shot": "zs"}
 RESOLUTIONS = ["R1344", "R1792"]
 N_LESSONS = 30
+MISSING = -1  # célula da predição que o modelo não retornou (null vira NaN)
 
 
 def _stem(name: str) -> str:
@@ -56,14 +57,27 @@ def pred_index(model: str, prompt: str) -> dict[tuple[str, str], str]:
     return idx
 
 
+def _labels(s: dict) -> np.ndarray:
+    return np.array(s["labels"], dtype=float).flatten()  # null -> NaN
+
+
 def _matrix(students: list[dict]) -> np.ndarray:
     rows = []
     for s in students:
-        lab = np.array(s["labels"], dtype=float).flatten()
+        lab = _labels(s)
         if lab.size != N_LESSONS:
             raise ValueError("labels com tamanho diferente de 30")
         rows.append(lab.astype(int))
     return np.array(rows)
+
+
+def _pred_matrix(students: list[dict]) -> np.ndarray:
+    """Predição no tamanho que o modelo devolveu: largura mínima de 30, NaN = null, MISSING = não retornado."""
+    labs = [_labels(s) for s in students]
+    out = np.full((len(labs), max([N_LESSONS, *(lab.size for lab in labs)])), float(MISSING))
+    for i, lab in enumerate(labs):
+        out[i, :lab.size] = lab
+    return out
 
 
 def _parse_json(raw: bytes) -> dict:
@@ -93,14 +107,23 @@ def _find_students(d: dict) -> list[dict]:
 def parse_pred(raw: bytes) -> tuple[np.ndarray | None, str]:
     """(matriz, '') da predição, ou (None, motivo) se o JSON do modelo for inválido."""
     try:
-        return _matrix(_find_students(_parse_json(raw))), ""
+        return _pred_matrix(_find_students(_parse_json(raw))), ""
     except (ValueError, KeyError, TypeError) as e:
         return None, f"{type(e).__name__}: {e}"
 
 
 def confusion(gt: np.ndarray, pred: np.ndarray) -> dict[str, int]:
-    return dict(TP=int(((gt == 1) & (pred == 1)).sum()), FP=int(((gt == 0) & (pred == 1)).sum()),
-                FN=int(((gt == 1) & (pred == 0)).sum()), TN=int(((gt == 0) & (pred == 0)).sum()))
+    """Regras da planilha consolidada: dia não retornado conta como 0, null fica fora e
+    dia além do GT só entra (como FP) quando vale 1."""
+    p = np.where(pred[:, :N_LESSONS] == MISSING, 0, pred[:, :N_LESSONS])  # NaN não casa com 0 nem 1
+    extra_fp = int((pred[:, N_LESSONS:] == 1).sum())
+    return dict(TP=int(((gt == 1) & (p == 1)).sum()), FP=int(((gt == 0) & (p == 1)).sum()) + extra_fp,
+                FN=int(((gt == 1) & (p == 0)).sum()), TN=int(((gt == 0) & (p == 0)).sum()))
+
+
+def returned_days(pred: np.ndarray) -> np.ndarray:
+    """Quantos dias o modelo devolveu para cada aluno (null conta como devolvido)."""
+    return (pred != MISSING).sum(axis=1)
 
 
 def scores(c: dict[str, int]) -> dict[str, float]:

@@ -60,7 +60,7 @@ Para parar, use `Ctrl+C` no terminal.
 3. Veja:
    - **Métricas gerais**: vêm da planilha consolidada (sem processamento, sem corte), com kappa agregado, presenças acertadas (TP), faltas acertadas (TN) e tabela por amostra.
    - **Métricas da imagem**: acurácia, kappa, precisão, recall, F1 e TP/FP/FN/TN.
-   - **Três painéis**: imagem, labels (GT) e inferência. Laranja cheio = falsa presença (FP); contorno laranja = presença perdida (FN).
+   - **Três painéis**: imagem, labels (GT) e inferência. Laranja cheio = falsa presença (FP); contorno laranja = presença perdida (FN). Na inferência, dias além dos 30 aparecem em azul e dias não retornados ou `null` aparecem tracejados (veja as regras abaixo).
 
 ### Modo `upload`
 
@@ -68,6 +68,14 @@ Para parar, use `Ctrl+C` no terminal.
 2. Os painéis e as métricas da imagem aparecem quando os três estiverem carregados. As métricas gerais da planilha só existem no modo `drive`.
 
 Formato esperado dos JSONs: `{"students": [{"student_name": "...", "labels": [30 valores 0/1]}]}`. O GT também pode vir embrulhado numa chave de id, e cercas markdown (` ```json `) ao redor são ignoradas. A comparação é feita por posição da linha do aluno.
+
+O GT precisa ter 30 valores por aluno; a predição pode vir com outro tamanho. As métricas seguem as mesmas regras da planilha consolidada:
+
+| Caso na predição | Métricas | Na grade |
+| --- | --- | --- |
+| Dia além dos 30 com `1` | conta como FP | azul cheio |
+| Dia além dos 30 com `0` | fica fora | contorno azul |
+| Dia não retornado (ex.: só 26 dias) | conta como `0` (FN se o GT for 1, TN se for 0) | tracejado |
 
 Se o modelo devolveu JSON inválido para a imagem, o app mostra um aviso no lugar das métricas.
 
