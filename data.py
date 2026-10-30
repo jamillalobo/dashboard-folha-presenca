@@ -15,6 +15,9 @@ RESOLUTIONS = ["R1344", "R1792"]
 N_LESSONS = 30
 MISSING = -1  # célula da predição que o modelo não retornou (null vira NaN)
 
+# Classe de cada célula (aluno × aula), ver `classify`
+NONE, OUT, TP, TN, FP, FN, FP_NOPRED, FN_NOPRED, FP_EXTRA = range(9)
+
 
 def _stem(name: str) -> str:
     return Path(name).stem
@@ -67,7 +70,7 @@ def _matrix(students: list[dict]) -> np.ndarray:
         lab = _labels(s)
         if lab.size != N_LESSONS:
             raise ValueError("labels com tamanho diferente de 30")
-        rows.append(lab.astype(int))
+        rows.append(lab)  # 0/1, ou NaN quando o GT é null
     return np.array(rows)
 
 
@@ -112,17 +115,52 @@ def parse_pred(raw: bytes) -> tuple[np.ndarray | None, str]:
         return None, f"{type(e).__name__}: {e}"
 
 
+def classify(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
+    """Classe (NONE, OUT, TP, TN, FP, FN, FP_NOPRED, FN_NOPRED, FP_EXTRA) de cada célula.
+
+    A grade tem max(alunos) × max(30, aulas): o pareamento é por posição.
+      GT 1/0 × predição 1/0           -> TP / TN / FP / FN
+      GT 1 × null ou ausente          -> FN        GT 0 × null ou ausente -> FP
+      GT null                         -> fora da conta
+      GT ausente (aula além do GT)     -> 0 ou 1 é FP, null fica fora
+      GT ausente (aluno além do GT)   -> toda célula devolvida é FP, inclusive 0 e null
+      aluno omitido                   -> linha da predição vazia: GT 1 é FN, GT 0 é FP
+      GT ausente × predição ausente   -> NONE (a célula não existe)
+    """
+    n_gt, n_pred = gt.shape[0], pred.shape[0]
+    rows, cols = max(n_gt, n_pred), max(N_LESSONS, pred.shape[1])
+    g = np.full((rows, cols), np.nan)
+    g[:n_gt, :N_LESSONS] = gt
+    in_gt = np.zeros((rows, cols), bool)
+    in_gt[:n_gt, :N_LESSONS] = True
+    p = np.full((rows, cols), float(MISSING))
+    p[:n_pred, :pred.shape[1]] = pred
+    absent, null = p == MISSING, np.isnan(p)
+    nopred = absent | null
+    g1, g0 = in_gt & (g == 1), in_gt & (g == 0)
+    invented = ~in_gt & (np.arange(rows)[:, None] >= n_gt)
+    extra_day = ~in_gt & ~invented
+
+    out = np.full((rows, cols), NONE)
+    out[in_gt & np.isnan(g)] = OUT
+    out[g1 & (p == 1)], out[g0 & (p == 0)] = TP, TN
+    out[g0 & (p == 1)], out[g1 & (p == 0)] = FP, FN
+    out[g1 & nopred], out[g0 & nopred] = FN_NOPRED, FP_NOPRED
+    out[invented & ~absent] = FP_EXTRA
+    out[extra_day & ((p == 0) | (p == 1))] = FP_EXTRA
+    out[extra_day & null] = OUT
+    return out
+
+
 def confusion(gt: np.ndarray, pred: np.ndarray) -> dict[str, int]:
-    """Regras da planilha consolidada: dia não retornado conta como 0, null fica fora e
-    dia além do GT só entra (como FP) quando vale 1."""
-    p = np.where(pred[:, :N_LESSONS] == MISSING, 0, pred[:, :N_LESSONS])  # NaN não casa com 0 nem 1
-    extra_fp = int((pred[:, N_LESSONS:] == 1).sum())
-    return dict(TP=int(((gt == 1) & (p == 1)).sum()), FP=int(((gt == 0) & (p == 1)).sum()) + extra_fp,
-                FN=int(((gt == 1) & (p == 0)).sum()), TN=int(((gt == 0) & (p == 0)).sum()))
+    """TP/FP/FN/TN pelas regras por célula de `classify`."""
+    c = classify(gt, pred)
+    return dict(TP=int((c == TP).sum()), TN=int((c == TN).sum()),
+                FP=int(np.isin(c, [FP, FP_NOPRED, FP_EXTRA]).sum()), FN=int(np.isin(c, [FN, FN_NOPRED]).sum()))
 
 
 def returned_days(pred: np.ndarray) -> np.ndarray:
-    """Quantos dias o modelo devolveu para cada aluno (null conta como devolvido)."""
+    """Quantas aulas o modelo devolveu para cada aluno (null conta como devolvido)."""
     return (pred != MISSING).sum(axis=1)
 
 

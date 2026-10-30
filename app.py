@@ -23,7 +23,9 @@ text-overflow:ellipsis;color:#444}
 .c.p{background:#2b2b2b;border-color:#2b2b2b}.c.fp{background:#c8501a;border-color:#c8501a}
 .c.fn{border-color:#c8501a;background:#fff}
 .c.na{border-style:dashed;border-color:#8a8a8a;background:transparent}
-.c.ex{background:#2f6fd0;border-color:#2f6fd0}.c.ex0{border-color:#2f6fd0;background:#fff}
+.c.ex{border-color:#2f6fd0;background:#fff}
+.c.fp.nd{background-image:repeating-linear-gradient(45deg,#fff 0 1.5px,transparent 1.5px 4px)}
+.c.fn.nd{border-style:dashed}
 .legend span{margin-right:14px;font-size:13px}
 .legend .c{display:inline-block;vertical-align:-2px;margin-right:4px}
 </style>""", unsafe_allow_html=True)
@@ -39,39 +41,42 @@ def pred_index(model, prompt):
     return data.pred_index(model, prompt)
 
 
-def grid(names, shown, gt=None):
-    """Tabela de células. Sem `gt`, desenha GT; com `gt`, marca FP/FN contra o GT,
-    os dias além do GT em azul e os não retornados/null tracejados."""
-    width = shown.shape[1]
+CELL_CLASS = {data.TP: "p", data.TN: "", data.FP: "fp", data.FN: "fn", data.FP_NOPRED: "fp nd",
+              data.FN_NOPRED: "fn nd", data.FP_EXTRA: "ex", data.OUT: "na", data.NONE: None}
+
+
+def _table(names, cell_classes, width):
+    """Tabela HTML; classe None = célula inexistente. Colunas além do GT têm o número em azul."""
     rows = []
-    for i, name in enumerate(names):
-        cells = []
-        for j in range(width):
-            v = shown[i, j] if i < len(shown) else 0
-            if j >= data.N_LESSONS:  # dia além do GT (só existe na predição)
-                cls = None if v == data.MISSING else "na" if np.isnan(v) else "ex" if v == 1 else "ex0"
-            elif gt is not None and (v == data.MISSING or np.isnan(v)):
-                cls = "na"
-            else:
-                cls = "p" if v else ""
-                if gt is not None:
-                    g = gt[i, j]
-                    cls = "fp" if (v and not g) else "fn" if (g and not v) else cls
-            cells.append("<td></td>" if cls is None else f'<td><span class="c {cls}"></span></td>')
-        rows.append(f'<tr><td class="n">{html.escape(name)}</td>{"".join(cells)}</tr>')
+    for name, classes in zip(names, cell_classes):
+        cells = "".join("<td></td>" if c is None else f'<td><span class="c {c}"></span></td>' for c in classes)
+        rows.append(f'<tr><td class="n">{html.escape(name)}</td>{cells}</tr>')
     head = "".join(f'<td style="text-align:center;color:{"#2f6fd0" if j >= data.N_LESSONS else "#888"}">{j + 1}</td>'
                    for j in range(width))
     return f'<table class="grid"><tr><td></td>{head}</tr>{"".join(rows)}</table>'
 
 
-def days_note(pred) -> str:
-    """Resumo dos tamanhos fora do padrão e dos nulls, ou '' se a predição veio com 30 dias por aluno."""
-    sizes = pd.Series(data.returned_days(pred)).value_counts().sort_index()
-    parts = [f"{n} aluno(s) com {d} dias" for d, n in sizes.items() if d != data.N_LESSONS]
-    nulls = int(np.isnan(pred).sum())
-    if nulls:
-        parts.append(f"{nulls} valor(es) null (fora das métricas)")
-    return "; ".join(parts)
+def grid_gt(names, gt):
+    return _table(names, [["na" if np.isnan(v) else "p" if v else "" for v in row] for row in gt], gt.shape[1])
+
+
+def grid_pred(names, codes):
+    """Grade da predição colorida pela classe de cada célula (`data.classify`)."""
+    extra = [f"Aluno a mais {k + 1}" for k in range(codes.shape[0] - len(names))]
+    return _table(names + extra, [[CELL_CLASS[c] for c in row] for row in codes], codes.shape[1])
+
+
+def structure_note(n_gt, pred) -> str:
+    """Diferenças de estrutura entre predição e GT (alunos e aulas), ou '' se batem."""
+    parts = []
+    if pred.shape[0] > n_gt:
+        parts.append(f"{pred.shape[0] - n_gt} aluno(s) a mais")
+    if pred.shape[0] < n_gt:
+        parts.append(f"{n_gt - pred.shape[0]} aluno(s) omitido(s)")
+    days = sorted(set(data.returned_days(pred[:n_gt])) - {data.N_LESSONS})
+    if days:
+        parts.append(f"{' e '.join(map(str, days))} aulas de {data.N_LESSONS}")
+    return ", ".join(parts[:-1]) + " e " + parts[-1] if len(parts) > 1 else "".join(parts)
 
 
 def _source() -> str:
@@ -136,7 +141,7 @@ if SOURCE == "drive":
     image_bytes = drive.download(gts[image_id]["image"])
     gt_raw = drive.download(gts[image_id]["label"])
     pred_raw = drive.download(preds[(image_id, resolution)])
-    pred_info = f"{model} · {resolution}"
+    pred_info = f"Resolução {resolution}"
 else:
     # ---- upload: arraste os três arquivos ------------------------------------
     u_img, u_gt, u_pred = st.columns(3)
@@ -159,10 +164,7 @@ except (ValueError, KeyError, TypeError, StopIteration) as e:
     st.stop()
 pred, pred_error = data.parse_pred(pred_raw)
 pred_ok = pred is not None
-if pred_ok and pred.shape[0] != gt.shape[0]:
-    st.warning(f"Predição tem {pred.shape[0]} alunos e o GT {gt.shape[0]}; comparando as primeiras linhas.")
-    r = min(pred.shape[0], gt.shape[0])
-    names, gt, pred = names[:r], gt[:r], pred[:r]
+codes = data.classify(gt, pred) if pred_ok else None
 
 if pred_ok:
     conf = data.confusion(gt, pred)
@@ -177,14 +179,10 @@ if pred_ok:
 else:
     st.error(f"A predição está inválida ou fora do formato esperado ({pred_error}).")
 
-legend = [("p", "Presente (1)"), ("", "Ausente (0)"), ("fp", "Falsa presença (FP)"), ("fn", "Presença perdida (FN)")]
-if pred_ok:  # itens da predição só entram quando aparecem na grade
-    has_extra = (pred[:, data.N_LESSONS:] != data.MISSING).any()  # as duas de "dia a mais" andam juntas
-    legend += [(cls, text) for cls, text, used in [
-        ("ex", "Dia a mais = 1 (FP)", has_extra),
-        ("ex0", "Dia a mais = 0 (fora)", has_extra),
-        ("na", "Não retornado", (pred[:, :data.N_LESSONS] == data.MISSING).any() or np.isnan(pred).any())] if used]
-st.markdown('<div class="legend">' + "".join(f'<span><i class="c {cls}"></i>{text}</span>' for cls, text in legend)
+LEGEND = [("p", "Presente (1)"), ("", "Ausente (0)"), ("fp", "Falsa presença (FP)"), ("fn", "Presença perdida (FN)"),
+          ("fp nd", "Null/ausente com GT 0 (FP)"), ("fn nd", "Null/ausente com GT 1 (FN)"),
+          ("ex", "Aula ou aluno a mais (FP)"), ("na", "Fora da conta (null)")]
+st.markdown('<div class="legend">' + "".join(f'<span><i class="c {cls}"></i>{text}</span>' for cls, text in LEGEND)
             + "</div>", unsafe_allow_html=True)
 
 left, mid, right = st.columns([1, 1.6, 1.6])
@@ -193,17 +191,15 @@ with left:
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes)))
     st.image(img, width="stretch")
 with mid:
-    st.subheader("Ground truth")
-    st.caption(f"{len(names)} alunos × {data.N_LESSONS} aulas")
-    st.markdown(grid(names, gt), unsafe_allow_html=True)
+    st.markdown(f'### Ground truth <span style="font-size:.9rem;font-weight:400;color:#777">'
+                f'{len(names)} alunos × {data.N_LESSONS} aulas</span>', unsafe_allow_html=True)
+    st.markdown(grid_gt(names, gt), unsafe_allow_html=True)
 with right:
-    st.subheader("Predição do modelo")
-    if pred_info:
-        st.markdown(f"**{pred_info}**")
-    st.caption("Erros marcados contra os labels")
+    sub = f' <span style="font-size:.9rem;font-weight:400;color:#777">{pred_info}</span>' if pred_info else ""
+    st.markdown(f"### Predição do modelo{sub}", unsafe_allow_html=True)
     if pred_ok:
-        if note := days_note(pred):
-            st.warning(f"Fora de {data.N_LESSONS} dias: {note}.")
-        st.markdown(grid(names, pred, gt), unsafe_allow_html=True)
+        if note := structure_note(len(names), pred):
+            st.warning(f"Estrutura diferente do GT: {note}.")
+        st.markdown(grid_pred(names, codes), unsafe_allow_html=True)
     else:
         st.caption("Sem predição válida para exibir.")
