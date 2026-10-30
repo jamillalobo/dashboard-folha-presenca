@@ -79,11 +79,17 @@ def structure_note(n_gt, pred) -> str:
     return ", ".join(parts[:-1]) + " e " + parts[-1] if len(parts) > 1 else "".join(parts)
 
 
+DRIVE_ENABLED = False  
+
 def _source() -> str:
-    """Fonte dos dados, escolhida na linha de comando: streamlit run app.py -- --source drive|upload"""
+    """Fonte dos dados. Com o Drive desligado só existe `upload`, sem precisar de argumentos."""
     p = argparse.ArgumentParser()
-    p.add_argument("--source", choices=["drive", "upload"], default="drive")
-    return p.parse_known_args(sys.argv[1:])[0].source
+    p.add_argument("--source", choices=["drive", "upload"], default="drive" if DRIVE_ENABLED else "upload")
+    source = p.parse_known_args(sys.argv[1:])[0].source
+    if source == "drive" and not DRIVE_ENABLED:
+        st.error("O modo Drive está desabilitado. Rode sem `--source` (ou com `--source upload`).")
+        st.stop()
+    return source
 
 
 SOURCE = _source()
