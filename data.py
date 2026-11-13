@@ -115,6 +115,31 @@ def parse_pred(raw: bytes) -> tuple[np.ndarray | None, str]:
         return None, f"{type(e).__name__}: {e}"
 
 
+def parse_pred_classic(raw: bytes, n_gt: int) -> tuple[np.ndarray | None, str]:
+    """Predição do modelo clássico: `marks` é uma grade de booleanos (True = presente), sem nomes.
+
+    A grade detectada costuma ser maior que a folha (linhas em branco no fim, coluna a mais). Fora da área
+    do GT (alunos além de `n_gt`, aulas além de 30) um False é só célula vazia, não uma resposta: vira
+    MISSING e o excesso do fim é cortado. Só um True fora do GT conta como falsa presença.
+    """
+    try:
+        marks = np.array(_parse_json(raw)["marks"], dtype=float)
+        if marks.ndim != 2:
+            raise ValueError("`marks` não é uma grade 2D")
+    except (ValueError, KeyError, TypeError) as e:
+        return None, f"{type(e).__name__}: {e}"
+    outside = np.ones(marks.shape, bool)
+    outside[:n_gt, :N_LESSONS] = False
+    marks[outside & (marks == 0)] = MISSING
+    used = marks != MISSING
+    rows = max(n_gt, int(np.flatnonzero(used.any(axis=1)).max(initial=-1)) + 1)
+    cols = max(N_LESSONS, int(np.flatnonzero(used.any(axis=0)).max(initial=-1)) + 1)
+    out = np.full((rows, cols), float(MISSING))
+    h, w = min(rows, marks.shape[0]), min(cols, marks.shape[1])
+    out[:h, :w] = marks[:h, :w]
+    return out, ""
+
+
 def classify(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
     """Classe (NONE, OUT, TP, TN, FP, FN, FP_NOPRED, FN_NOPRED, FP_EXTRA) de cada célula.
 

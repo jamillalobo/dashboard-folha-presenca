@@ -26,6 +26,13 @@ text-overflow:ellipsis;color:#444}
 .c.ex{border-color:#2f6fd0;background:#fff}
 .c.fp.nd{background-image:repeating-linear-gradient(45deg,#fff 0 1.5px,transparent 1.5px 4px)}
 .c.fn.nd{border-style:dashed}
+.st-key-pred_nav{align-items:center}
+.st-key-pred_nav [data-testid=stMarkdownContainer]:has(.spacer){flex:1 1 auto}
+.st-key-pred_nav button{min-height:0;height:auto;padding:0 .25rem;display:flex;align-items:center}
+.st-key-pred_nav button p{font-size:.7rem;line-height:1;margin:0}
+.st-key-pred_nav [data-testid=stMarkdownContainer] p{margin:0;white-space:nowrap}
+.st-key-pred_nav .src{width:7em;text-align:center;font-weight:600}  /* largura de "Modelo clássico" */
+.st-key-pred_nav [data-testid=stMarkdownContainer]:first-child{margin-right:.5rem}
 .legend span{margin-right:14px;font-size:13px}
 .legend .c{display:inline-block;vertical-align:-2px;margin-right:4px}
 </style>""", unsafe_allow_html=True)
@@ -79,6 +86,7 @@ def structure_note(n_gt, pred) -> str:
     return ", ".join(parts[:-1]) + " e " + parts[-1] if len(parts) > 1 else "".join(parts)
 
 
+PRED_SOURCES = ["LLM", "Modelo clássico"]
 DRIVE_ENABLED = False  
 
 def _source() -> str:
@@ -150,17 +158,31 @@ if SOURCE == "drive":
     pred_info = f"Resolução {resolution}"
 else:
     # ---- upload: arraste os três arquivos ------------------------------------
+    # uma linha só de títulos, para os três uploaders começarem na mesma altura
+    h_img, h_gt, h_pred = st.columns(3, vertical_alignment="center")
+    h_img.markdown("Imagem")
+    h_gt.markdown("Ground truth (JSON)")
+    # seletor com setas: as duas fontes se alternam (com 2 opções, qualquer seta troca)
+    st.session_state.setdefault("pred_source_i", 0)
+    cycle = lambda step: st.session_state.update(pred_source_i=(st.session_state.pred_source_i + step) % len(PRED_SOURCES))
+    pred_source = PRED_SOURCES[st.session_state.pred_source_i]
+    with h_pred.container(key="pred_nav", horizontal=True, gap="xxsmall", vertical_alignment="center"):
+        st.markdown("Predição (JSON)")
+        st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
+        st.button("◀", key="pred_prev", type="tertiary", on_click=cycle, args=(-1,))
+        st.markdown(f'<div class="src">{pred_source}</div>', unsafe_allow_html=True)
+        st.button("▶", key="pred_next", type="tertiary", on_click=cycle, args=(1,))
     u_img, u_gt, u_pred = st.columns(3)
-    up_img = u_img.file_uploader("Imagem", type=["jpg", "jpeg", "png"])
-    up_gt = u_gt.file_uploader("Ground truth (JSON)", type=["json", "md", "txt"])
-    up_pred = u_pred.file_uploader("Predição (JSON)", type=["json", "md", "txt"])
+    up_img = u_img.file_uploader("Imagem", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+    up_gt = u_gt.file_uploader("Ground truth (JSON)", type=["json", "md", "txt"], label_visibility="collapsed")
+    up_pred = u_pred.file_uploader("Predição (JSON)", type=["json", "md", "txt"], label_visibility="collapsed")
     if not (up_img and up_gt and up_pred):
         st.info("Arraste a imagem, o ground truth e a predição para visualizar.")
         st.stop()
     image_bytes, gt_raw, pred_raw = up_img.getvalue(), up_gt.getvalue(), up_pred.getvalue()
     # no upload o modelo não vem no arquivo; a resolução sai do nome (img…__R1344.json)
     m = re.search(r"__(R\d+)\.\w+$", up_pred.name)
-    pred_info = f"Resolução {m.group(1)}" if m else ""
+    pred_info = " · ".join([pred_source, *([f"Resolução {m.group(1)}"] if m else [])])
 
 # ---- imagem selecionada --------------------------------------------------
 try:
@@ -168,7 +190,10 @@ try:
 except (ValueError, KeyError, TypeError, StopIteration) as e:
     st.error(f"Ground truth inválido ou fora do formato esperado ({type(e).__name__}: {e}).")
     st.stop()
-pred, pred_error = data.parse_pred(pred_raw)
+if SOURCE == "upload" and pred_source == "Modelo clássico":
+    pred, pred_error = data.parse_pred_classic(pred_raw, len(names))  # nomes vêm sempre do GT
+else:
+    pred, pred_error = data.parse_pred(pred_raw)
 pred_ok = pred is not None
 codes = data.classify(gt, pred) if pred_ok else None
 
