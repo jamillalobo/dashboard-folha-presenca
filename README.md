@@ -56,6 +56,11 @@ Para parar, use `Ctrl+C` no terminal.
 1. Arraste (ou clique para escolher) três arquivos: a **imagem** (`.jpg`/`.jpeg`/`.png`), o **ground truth** (`.json`, ou `.md` com JSON) e a **predição** (`.json`).
 2. Os painéis e as métricas da imagem aparecem quando os três estiverem carregados.
 
+Use o dropdown ao lado de **Predição (JSON)** para escolher o formato do arquivo de predição:
+
+- **LLM**: o formato abaixo (`students` + `labels`).
+- **Modelo clássico**: `{"marks": [[true/false, ...], ...]}`, uma linha por aluno, `true` = presente. Não tem nomes: os nomes vêm sempre do ground truth, pareando por posição da linha. Linhas em branco no fim e colunas além de 30 só aparecem (como FP) se tiverem um `true`; `false` fora da área do GT é ignorado.
+
 Formato esperado dos JSONs: `{"students": [{"student_name": "...", "labels": [30 valores 0/1]}]}`. O GT também pode vir embrulhado numa chave de id, e cercas markdown (` ```json `) ao redor são ignoradas. A comparação é feita por posição da linha do aluno.
 
 ## Como cada célula é classificada
